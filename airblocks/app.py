@@ -20,13 +20,17 @@ CELL_SIZE = 50
 CAMERA_INDEX = int(os.getenv("CAMERA_INDEX", "1"))
 MAX_CAMERA_INDEX = int(os.getenv("MAX_CAMERA_INDEX", "5"))
 SCREEN_W = GRID_SIZE * CELL_SIZE
-SCREEN_H = 620
+SCREEN_H = 724          # grid(500) + gap(12) + container(200) + gap(12)
 GRID_ORIGIN_X = 0
 GRID_ORIGIN_Y = 0
-BLOCK_SLOT_Y = 560
-# Map ROI Y range to a taller virtual space so blocks (at y=560) are reachable
-# at ~70 % of the ROI height rather than 90 %.  X range stays at SCREEN_W.
-CURSOR_Y_RANGE = int(BLOCK_SLOT_Y / 0.70)
+BLOCK_SLOT_Y = 612      # center of 200 px container: 512 + 100
+# Y axis mapping: grid top (y=0) sits at 15 % of ROI, block tray (y=560) at 70 %.
+# Anything outside those bands is clamped by the game loop.
+CURSOR_Y_RANGE  = int(BLOCK_SLOT_Y / (0.70 - 0.15))   # ~1018
+CURSOR_Y_OFFSET = int(-0.15 * CURSOR_Y_RANGE)           # ~-153
+# X axis: 15 % dead zone on each side (symmetric).
+CURSOR_X_RANGE  = int(SCREEN_W / (1.0 - 2 * 0.15))    # ~714
+CURSOR_X_OFFSET = int(-0.15 * CURSOR_X_RANGE)           # ~-107
 GRAB_MODES = {
     "fist": "Closed Fist",
     "pinch": "Pinch",
@@ -186,8 +190,8 @@ CURSOR_ALPHA = 0.35  # EMA smoothing — lower = smoother but more lag
 def get_cursor_position(roi_landmarks):
     """Map ROI-relative landmark[9] (0-1 within the ROI) to game screen coords."""
     lm = roi_landmarks[9]
-    x = int(lm.x * SCREEN_W)
-    y = int(lm.y * CURSOR_Y_RANGE)
+    x = int(lm.x * CURSOR_X_RANGE) + CURSOR_X_OFFSET
+    y = int(lm.y * CURSOR_Y_RANGE) + CURSOR_Y_OFFSET
     return x, y
 
 def get_finger_open_count(landmarks):
@@ -256,7 +260,7 @@ def is_grab_active(gesture, grab_mode):
 
 def is_release_active(gesture, grab_mode):
     if grab_mode == "pinch":
-        return gesture in ("TWO", "THREE")
+        return gesture in ("TWO", "THREE", "OPEN")
     return gesture == "OPEN"
 
 def clamp_roi(roi, frame_w, frame_h):

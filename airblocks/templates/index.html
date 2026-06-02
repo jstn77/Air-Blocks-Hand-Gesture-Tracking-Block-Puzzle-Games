@@ -448,7 +448,10 @@ function setRoiInputs(roi) {
 }
 
 function updateRoiOverlay() {
-  const { scaleX, scaleY } = getCameraScale();
+  const rect = document.getElementById("cameraPanel").getBoundingClientRect();
+  if (!rect.width || !rect.height) return;  // image not yet rendered
+  const scaleX = rect.width / 640;
+  const scaleY = rect.height / 480;
   roiBox.style.left   = `${currentRoi.x * scaleX}px`;
   roiBox.style.top    = `${currentRoi.y * scaleY}px`;
   roiBox.style.width  = `${currentRoi.w * scaleX}px`;
@@ -478,24 +481,29 @@ function dragRoi(event) {
   let { x, y, w, h } = currentRoi;
 
   if (activeHandle === "move") {
-    x = pos.x - dragOffset.x;
-    y = pos.y - dragOffset.y;
-  } else if (activeHandle === "nw") {
-    const newX = Math.min(pos.x, x + w - minSize);
-    const newY = Math.min(pos.y, y + h - minSize);
-    w = x + w - newX; h = y + h - newY; x = newX; y = newY;
-  } else if (activeHandle === "ne") {
-    const newY = Math.min(pos.y, y + h - minSize);
-    w = Math.max(minSize, pos.x - x); h = y + h - newY; y = newY;
-  } else if (activeHandle === "sw") {
-    const newX = Math.min(pos.x, x + w - minSize);
-    w = x + w - newX; h = Math.max(minSize, pos.y - y); x = newX;
-  } else if (activeHandle === "se") {
-    w = Math.max(minSize, pos.x - x);
-    h = Math.max(minSize, pos.y - y);
+    // Clamp position only — size never changes when moving to the edge.
+    currentRoi = {
+      x: Math.max(0, Math.min(pos.x - dragOffset.x, 640 - w)),
+      y: Math.max(0, Math.min(pos.y - dragOffset.y, 480 - h)),
+      w, h,
+    };
+  } else {
+    if (activeHandle === "nw") {
+      const newX = Math.min(pos.x, x + w - minSize);
+      const newY = Math.min(pos.y, y + h - minSize);
+      w = x + w - newX; h = y + h - newY; x = newX; y = newY;
+    } else if (activeHandle === "ne") {
+      const newY = Math.min(pos.y, y + h - minSize);
+      w = Math.max(minSize, pos.x - x); h = y + h - newY; y = newY;
+    } else if (activeHandle === "sw") {
+      const newX = Math.min(pos.x, x + w - minSize);
+      w = x + w - newX; h = Math.max(minSize, pos.y - y); x = newX;
+    } else if (activeHandle === "se") {
+      w = Math.max(minSize, pos.x - x);
+      h = Math.max(minSize, pos.y - y);
+    }
+    currentRoi = clampRoi({ x, y, w, h });
   }
-
-  currentRoi = clampRoi({ x, y, w, h });
   setRoiInputs(currentRoi);
   updateRoiOverlay();
   scheduleRoiPush();
@@ -529,6 +537,8 @@ roiOverlay.addEventListener("pointermove", dragRoi);
 roiOverlay.addEventListener("pointerup", stopRoiDrag);
 roiOverlay.addEventListener("pointercancel", stopRoiDrag);
 window.addEventListener("resize", updateRoiOverlay);
+// Re-position overlay whenever the camera panel changes size (e.g. first MJPEG frame arriving).
+new ResizeObserver(updateRoiOverlay).observe(document.getElementById("cameraPanel"));
 
 async function loadCameraOptions() {
   try {
@@ -808,16 +818,23 @@ function drawGrid(grid) {
 
 function drawBlockSlots(blocks) {
   blocks.forEach((b) => {
-    const width = b.matrix[0].length * CELL;
-    const height = b.matrix.length * CELL;
-    const x = b.base_x - Math.floor(width / 2);
-    const y = b.base_y - Math.floor(height / 2);
-
-    ctx.fillStyle = "rgba(255,255,255,0.08)";
-    ctx.strokeStyle = "rgba(140,160,210,0.35)";
-    ctx.lineWidth = 1.2;
-    ctx.fillRect(x, y, width, height);
-    ctx.strokeRect(x + 0.5, y + 0.5, width - 1, height - 1);
+    if (!b.is_alive) return;
+    const rows = b.matrix.length;
+    const cols = b.matrix[0].length;
+    const ox = b.base_x - Math.floor(cols * CELL / 2);
+    const oy = b.base_y - Math.floor(rows * CELL / 2);
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (!b.matrix[r][c]) continue;
+        const cx = ox + c * CELL;
+        const cy = oy + r * CELL;
+        ctx.fillStyle = "rgba(255,255,255,0.07)";
+        ctx.strokeStyle = "rgba(140,160,210,0.30)";
+        ctx.lineWidth = 1;
+        ctx.fillRect(cx + 1, cy + 1, CELL - 2, CELL - 2);
+        ctx.strokeRect(cx + 1.5, cy + 1.5, CELL - 3, CELL - 3);
+      }
+    }
   });
 }
 
@@ -826,8 +843,8 @@ function drawBlock(matrix, px, py, colorKey, alpha=1) {
   for (let r = 0; r < matrix.length; r++) {
     for (let c = 0; c < matrix[r].length; c++) {
       if (matrix[r][c]) {
-        const x = px + c*CELL - Math.floor(matrix[r].length/2)*CELL;
-        const y = py + r*CELL - Math.floor(matrix.length/2)*CELL;
+        const x = px + c*CELL - Math.floor(matrix[r].length * CELL / 2);
+        const y = py + r*CELL - Math.floor(matrix.length * CELL / 2);
         ctx.fillStyle = hexToRgba(hex, 0.8*alpha);
         ctx.fillRect(x+2, y+2, CELL-4, CELL-4);
         ctx.strokeStyle = hexToRgba(hex, alpha);
