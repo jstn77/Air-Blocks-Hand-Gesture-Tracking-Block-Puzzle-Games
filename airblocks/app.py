@@ -24,6 +24,9 @@ SCREEN_H = 620
 GRID_ORIGIN_X = 0
 GRID_ORIGIN_Y = 0
 BLOCK_SLOT_Y = 560
+# Map ROI Y range to a taller virtual space so blocks (at y=560) are reachable
+# at ~70 % of the ROI height rather than 90 %.  X range stays at SCREEN_W.
+CURSOR_Y_RANGE = int(BLOCK_SLOT_Y / 0.70)
 GRAB_MODES = {
     "fist": "Closed Fist",
     "pinch": "Pinch",
@@ -116,20 +119,15 @@ def place_block(grid, matrix, start_row, start_col, color):
                 grid[start_row + r][start_col + c] = color
 
 def check_and_clear_lines(grid):
-    points = 0
-    # Clear full rows
+    # Collect both axes before clearing so combos are detected on the same state.
     rows_to_clear = [r for r in range(GRID_SIZE) if all(grid[r][c] != 0 for c in range(GRID_SIZE))]
-    for r in rows_to_clear:
-        grid.pop(r)
-        grid.insert(0, [0]*GRID_SIZE)
-        points += 100
-    # Clear full cols
     cols_to_clear = [c for c in range(GRID_SIZE) if all(grid[r][c] != 0 for r in range(GRID_SIZE))]
+    for r in rows_to_clear:
+        grid[r] = [0] * GRID_SIZE          # zero in-place; no gravity / row shift
     for c in cols_to_clear:
         for r in range(GRID_SIZE):
             grid[r][c] = 0
-        points += 100
-    return points
+    return (len(rows_to_clear) + len(cols_to_clear)) * 100
 
 def can_place_any(grid, blocks):
     for b in blocks:
@@ -147,7 +145,7 @@ def is_game_over(grid, blocks):
 
 # ─── MEDIAPIPE SETUP ──────────────────────────────────────────────────────────
 MODEL_PATH = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "Air-Blocks-Hand-Gesture-Tracking-Block-Puzzle-Games", "hand_landmarker.task")
+    os.path.join(os.path.dirname(__file__), "..", "hand_landmarker.task")
 )
 
 if not os.path.exists(MODEL_PATH):
@@ -183,9 +181,13 @@ if cap is None and CAMERA_INDEX != 0:
 if cap is None:
     raise RuntimeError("Could not open any camera input.")
 
-def get_cursor_position(landmarks):
-    x = int(landmarks[9].x * SCREEN_W)
-    y = int(landmarks[9].y * SCREEN_H)
+CURSOR_ALPHA = 0.35  # EMA smoothing — lower = smoother but more lag
+
+def get_cursor_position(roi_landmarks):
+    """Map ROI-relative landmark[9] (0-1 within the ROI) to game screen coords."""
+    lm = roi_landmarks[9]
+    x = int(lm.x * SCREEN_W)
+    y = int(lm.y * CURSOR_Y_RANGE)
     return x, y
 
 def get_finger_open_count(landmarks):
@@ -202,9 +204,28 @@ def is_pinch(landmarks, threshold=0.06):
     dist_sq = (dx * dx) + (dy * dy)
     return dist_sq <= (threshold * threshold)
 
+def is_three_finger_pinch(landmarks, threshold=0.07):
+    # Thumb tip close to both index and middle tips simultaneously.
+    thumb = landmarks[4]
+    index = landmarks[8]
+    middle = landmarks[12]
+    di_sq = (thumb.x - index.x)**2 + (thumb.y - index.y)**2
+    dm_sq = (thumb.x - middle.x)**2 + (thumb.y - middle.y)**2
+    return di_sq <= threshold**2 and dm_sq <= threshold**2
+
+def is_two_finger_release(landmarks):
+    # Thumb + index spread open (not pinching), middle + ring + pinky folded.
+    thumb_open = abs(landmarks[4].x - landmarks[2].x) > 0.04 or landmarks[4].y < landmarks[3].y
+    index_open = landmarks[8].y < landmarks[6].y
+    middle_open = landmarks[12].y < landmarks[10].y
+    ring_open = landmarks[16].y < landmarks[14].y
+    pinky_open = landmarks[20].y < landmarks[18].y
+    return (thumb_open and index_open
+            and (not middle_open) and (not ring_open) and (not pinky_open)
+            and not is_pinch(landmarks))
+
 def is_three_finger_release(landmarks):
-    # Target release pose for pinch mode: thumb + index + middle up,
-    # while ring and pinky stay folded.
+    # Thumb + index + middle extended, ring + pinky folded.
     thumb_open = abs(landmarks[4].x - landmarks[2].x) > 0.04 or landmarks[4].y < landmarks[3].y
     index_open = landmarks[8].y < landmarks[6].y
     middle_open = landmarks[12].y < landmarks[10].y
@@ -214,10 +235,14 @@ def is_three_finger_release(landmarks):
 
 def get_hand_status(landmarks):
     count = get_finger_open_count(landmarks)
-    if is_three_finger_release(landmarks):
-        return "THREE"
+    if is_three_finger_pinch(landmarks):   # check before 2-finger pinch — it also satisfies is_pinch
+        return "PINCH3"
     if is_pinch(landmarks):
         return "PINCH"
+    if is_two_finger_release(landmarks):
+        return "TWO"
+    if is_three_finger_release(landmarks):
+        return "THREE"
     if count >= 3:
         return "OPEN"
     if count == 0:
@@ -226,12 +251,12 @@ def get_hand_status(landmarks):
 
 def is_grab_active(gesture, grab_mode):
     if grab_mode == "pinch":
-        return gesture == "PINCH"
+        return gesture in ("PINCH", "PINCH3")
     return gesture == "CLOSED"
 
 def is_release_active(gesture, grab_mode):
     if grab_mode == "pinch":
-        return gesture == "THREE"
+        return gesture in ("TWO", "THREE")
     return gesture == "OPEN"
 
 def clamp_roi(roi, frame_w, frame_h):
@@ -250,11 +275,6 @@ def map_landmarks_from_roi(hand_landmarks, roi, frame_w, frame_h):
         mapped.append(SimpleNamespace(x=fx, y=fy, z=getattr(lm, "z", 0.0)))
     return mapped
 
-def map_point_to_roi(point, roi, roi_w, roi_h):
-    fx = roi["x"] + (point[0] * roi["w"] / roi_w)
-    fy = roi["y"] + (point[1] * roi["h"] / roi_h)
-    return int(fx), int(fy)
-
 # ─── BACKGROUND GAME LOOP THREAD ──────────────────────────────────────────────
 latest_frame = None
 frame_lock   = threading.Lock()
@@ -272,6 +292,10 @@ def game_loop():
     fps_timer    = time.time()
     fps_count    = 0
     fps_val      = 0
+    last_cursor_x = SCREEN_W // 2
+    last_cursor_y = SCREEN_H // 2
+    smooth_x = float(last_cursor_x)
+    smooth_y = float(last_cursor_y)
 
     while True:
         with cap_lock:
@@ -287,33 +311,43 @@ def game_loop():
             roi = clamp_roi(current_roi, frame_w, frame_h)
             current_roi.update(roi)
 
-        roi_rgb = frame_rgb[roi["y"]:roi["y"] + roi["h"], roi["x"]:roi["x"] + roi["w"]]
-        roi_h, roi_w = roi_rgb.shape[:2]
-        if roi_w < 2 or roi_h < 2:
-            time.sleep(0.01)
-            continue
-        detect_rgb = cv2.resize(roi_rgb, (CAM_W, CAM_H), interpolation=cv2.INTER_LINEAR)
-        mp_image  = mp.Image(image_format=mp.ImageFormat.SRGB, data=detect_rgb)
+        # np.ascontiguousarray: slices with x>0 or w<frame_w are non-contiguous,
+        # which silently breaks mp.Image — this makes the copy unconditional.
+        roi_rgb = np.ascontiguousarray(
+            frame_rgb[roi["y"]:roi["y"] + roi["h"], roi["x"]:roi["x"] + roi["w"]]
+        )
+        # MediaPipe detects best on images ≥224px; upscale small ROIs.
+        rh, rw = roi_rgb.shape[:2]
+        if rh < 224 or rw < 224:
+            scale = max(224 / rh, 224 / rw)
+            roi_rgb = cv2.resize(
+                roi_rgb, (int(rw * scale), int(rh * scale)), interpolation=cv2.INTER_LINEAR
+            )
+        mp_image  = mp.Image(image_format=mp.ImageFormat.SRGB, data=roi_rgb)
         timestamp_ms = int(time.time() * 1000)
         results   = hand_landmarker.detect_for_video(mp_image, timestamp_ms)
 
-        cursor_x, cursor_y   = -100, -100
-        current_gesture      = "NONE"
+        # Default: cursor stays at last clamped position so the pointer never
+        # disappears and a held block stays visible at the screen edge.
+        cursor_x, cursor_y = last_cursor_x, last_cursor_y
+        current_gesture    = "NONE"
 
         if results.hand_landmarks:
-            hand_landmarks = map_landmarks_from_roi(results.hand_landmarks[0], roi, frame_w, frame_h)
-            cursor_x, cursor_y   = get_cursor_position(hand_landmarks)
-            current_gesture      = get_hand_status(hand_landmarks)
+            roi_lm = results.hand_landmarks[0]  # ROI-relative (0-1)
 
-            for lm in hand_landmarks:
-                cx = int(lm.x * frame.shape[1])
-                cy = int(lm.y * frame.shape[0])
-                cv2.circle(frame, (cx, cy), 3, (0, 255, 0), -1)
+            raw_x, raw_y = get_cursor_position(roi_lm)
+            smooth_x = CURSOR_ALPHA * raw_x + (1 - CURSOR_ALPHA) * smooth_x
+            smooth_y = CURSOR_ALPHA * raw_y + (1 - CURSOR_ALPHA) * smooth_y
+            # Clamp to game screen so cursor "sticks" at the edge when hand
+            # reaches the ROI boundary rather than going off-canvas.
+            cursor_x = max(0, min(SCREEN_W, int(smooth_x)))
+            cursor_y = max(0, min(SCREEN_H, int(smooth_y)))
+            last_cursor_x, last_cursor_y = cursor_x, cursor_y
+            current_gesture = get_hand_status(roi_lm)
 
-            for idx in (0, 1, 2, 3):
-                handle_x = roi["x"] if idx in (0, 2) else roi["x"] + roi["w"]
-                handle_y = roi["y"] if idx in (0, 1) else roi["y"] + roi["h"]
-                cv2.circle(frame, (handle_x, handle_y), 6, (0, 255, 0), -1)
+            for lm in map_landmarks_from_roi(roi_lm, roi, frame_w, frame_h):
+                cv2.circle(frame, (int(lm.x * frame_w), int(lm.y * frame_h)), 3, (0, 255, 0), -1)
+        # No else: smooth stays valid; cursor holds last clamped position.
 
         cv2.rectangle(
             frame,
@@ -430,8 +464,6 @@ def state():
         last = None
         while True:
             with game_lock:
-                with roi_lock:
-                    roi_snapshot = current_roi.copy()
                 snap = json.dumps({
                     "state":    game_state["state"],
                     "grid":     game_state["grid"],
@@ -444,7 +476,7 @@ def state():
                     "fps":      game_state["fps"],
                     "camera_index": current_camera_index,
                     "grab_mode": current_grab_mode,
-                    "roi": roi_snapshot,
+                    "roi": current_roi,
                 })
             if snap != last:
                 yield f"data: {snap}\n\n"

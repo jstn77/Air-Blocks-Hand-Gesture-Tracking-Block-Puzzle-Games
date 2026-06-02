@@ -84,7 +84,7 @@
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 12px;
-    overflow: hidden;
+    overflow: visible;
     position: relative;
   }
   .panel-label {
@@ -105,35 +105,6 @@
     border-radius: 12px;
     /* mirror already done server-side, no need to flip */
   }
-  .roi-overlay {
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-  }
-  .roi-box {
-    position: absolute;
-    border: 2px solid #00ff66;
-    box-shadow: 0 0 0 1px rgba(0,255,102,0.15), 0 0 18px rgba(0,255,102,0.22);
-    background: rgba(0,255,102,0.05);
-    pointer-events: auto;
-    touch-action: none;
-  }
-  .roi-handle {
-    position: absolute;
-    width: 14px;
-    height: 14px;
-    border-radius: 999px;
-    border: 2px solid #00ff66;
-    background: #0a0a0f;
-    box-shadow: 0 0 10px rgba(0,255,102,0.35);
-    transform: translate(-50%, -50%);
-    pointer-events: auto;
-    touch-action: none;
-  }
-  .roi-handle.nw { left: 0; top: 0; cursor: nwse-resize; }
-  .roi-handle.ne { right: 0; top: 0; cursor: nesw-resize; }
-  .roi-handle.sw { left: 0; bottom: 0; cursor: nesw-resize; }
-  .roi-handle.se { right: 0; bottom: 0; cursor: nwse-resize; }
   .gesture-badge {
     position: absolute;
     bottom: 12px; right: 14px;
@@ -148,7 +119,39 @@
   .gesture-badge.OPEN   { border-color: var(--green); color: var(--green); }
   .gesture-badge.CLOSED { border-color: var(--red);   color: var(--red);   }
   .gesture-badge.PINCH  { border-color: var(--accent2); color: var(--accent2); }
+  .gesture-badge.PINCH3 { border-color: var(--accent2); color: var(--accent2); }
+  .gesture-badge.THREE  { border-color: var(--green); color: var(--green); }
+  .gesture-badge.TWO    { border-color: var(--accent2); color: var(--accent2); }
   .gesture-badge.NONE   { border-color: var(--muted); color: var(--muted); }
+
+  .roi-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+  .roi-box {
+    position: absolute;
+    border: 2px solid #00ff66;
+    box-shadow: 0 0 0 1px rgba(0,255,102,0.15), 0 0 18px rgba(0,255,102,0.22);
+    background: rgba(0,255,102,0.04);
+    pointer-events: auto;
+    touch-action: none;
+    cursor: move;
+  }
+  .roi-handle {
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    border-radius: 999px;
+    background: #00ff66;
+    box-shadow: 0 0 10px rgba(0,255,102,0.7);
+    pointer-events: auto;
+    touch-action: none;
+  }
+  .roi-handle.nw { left: 0; top: 0;       cursor: nwse-resize; transform: translate(-50%, -50%); }
+  .roi-handle.ne { right: 0; top: 0;      cursor: nesw-resize; transform: translate(50%, -50%); }
+  .roi-handle.sw { left: 0; bottom: 0;    cursor: nesw-resize; transform: translate(-50%, 50%); }
+  .roi-handle.se { right: 0; bottom: 0;   cursor: nwse-resize; transform: translate(50%, 50%); }
 
   .camera-controls {
     width: 100%;
@@ -377,8 +380,8 @@
   <!-- INSTRUCTIONS -->
   <div class="instructions">
     <h3>HOW TO PLAY</h3>
-    <div class="tip"><span class="tip-icon">✊</span>Closed fist to GRAB a block</div>
-    <div class="tip"><span class="tip-icon">🖐</span>Open hand to DROP / place it</div>
+    <div class="tip"><span class="tip-icon">✊</span>Fist mode — fist to GRAB, open hand to DROP</div>
+    <div class="tip"><span class="tip-icon">🤏</span>Pinch mode — 2 or 3 finger pinch to GRAB, 2 or 3 fingers open to DROP</div>
     <div class="tip"><span class="tip-icon">↔</span>Move hand to aim at grid cell</div>
     <div class="tip"><span class="tip-icon">✦</span>Clear full rows or columns for points</div>
   </div>
@@ -420,24 +423,19 @@ const roiBox = document.getElementById("roiBox");
 let currentRoi = { x: 80, y: 40, w: 480, h: 360 };
 let isDraggingRoi = false;
 let activeHandle = null;
+let dragOffset = { x: 0, y: 0 };
 
 function getCameraScale() {
   const rect = document.getElementById("cameraPanel").getBoundingClientRect();
-  return {
-    scaleX: rect.width / 640,
-    scaleY: rect.height / 480,
-    rect,
-  };
+  return { scaleX: rect.width / 640, scaleY: rect.height / 480, rect };
 }
 
 function clampRoi(roi) {
   const minSize = 80;
-  const maxW = 640;
-  const maxH = 480;
-  const x = Math.max(0, Math.min(roi.x, maxW - minSize));
-  const y = Math.max(0, Math.min(roi.y, maxH - minSize));
-  const w = Math.max(minSize, Math.min(roi.w, maxW - x));
-  const h = Math.max(minSize, Math.min(roi.h, maxH - y));
+  const x = Math.max(0, Math.min(roi.x, 640 - minSize));
+  const y = Math.max(0, Math.min(roi.y, 480 - minSize));
+  const w = Math.max(minSize, Math.min(roi.w, 640 - x));
+  const h = Math.max(minSize, Math.min(roi.h, 480 - y));
   return { x, y, w, h };
 }
 
@@ -451,42 +449,18 @@ function setRoiInputs(roi) {
 
 function updateRoiOverlay() {
   const { scaleX, scaleY } = getCameraScale();
-  roiBox.style.left = `${currentRoi.x * scaleX}px`;
-  roiBox.style.top = `${currentRoi.y * scaleY}px`;
-  roiBox.style.width = `${currentRoi.w * scaleX}px`;
+  roiBox.style.left   = `${currentRoi.x * scaleX}px`;
+  roiBox.style.top    = `${currentRoi.y * scaleY}px`;
+  roiBox.style.width  = `${currentRoi.w * scaleX}px`;
   roiBox.style.height = `${currentRoi.h * scaleY}px`;
-}
-
-async function setRoi(roi) {
-  currentRoi = clampRoi(roi);
-  setRoiInputs(currentRoi);
-  updateRoiOverlay();
-
-  try {
-    const res = await fetch("/roi/select", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(currentRoi),
-    });
-    const data = await res.json();
-    if (!res.ok || !data.ok) {
-      roiStatus.textContent = data.message || "ROI update failed.";
-      return;
-    }
-    currentRoi = clampRoi(data.current);
-    setRoiInputs(currentRoi);
-    updateRoiOverlay();
-    roiStatus.textContent = `ROI set to x:${currentRoi.x}, y:${currentRoi.y}, w:${currentRoi.w}, h:${currentRoi.h}`;
-  } catch (err) {
-    roiStatus.textContent = "ROI update failed.";
-  }
 }
 
 function clientToRoi(clientX, clientY) {
   const rect = document.getElementById("cameraPanel").getBoundingClientRect();
-  const x = ((clientX - rect.left) / rect.width) * 640;
-  const y = ((clientY - rect.top) / rect.height) * 480;
-  return { x, y };
+  return {
+    x: ((clientX - rect.left) / rect.width)  * 640,
+    y: ((clientY - rect.top)  / rect.height) * 480,
+  };
 }
 
 function startRoiDrag(handle, event) {
@@ -501,23 +475,21 @@ function dragRoi(event) {
   if (!isDraggingRoi) return;
   const pos = clientToRoi(event.clientX, event.clientY);
   const minSize = 80;
-  const maxW = 640;
-  const maxH = 480;
   let { x, y, w, h } = currentRoi;
 
-  if (activeHandle === "nw") {
-    x = Math.min(pos.x, x + w - minSize);
-    y = Math.min(pos.y, y + h - minSize);
-    w = currentRoi.x + currentRoi.w - x;
-    h = currentRoi.y + currentRoi.h - y;
+  if (activeHandle === "move") {
+    x = pos.x - dragOffset.x;
+    y = pos.y - dragOffset.y;
+  } else if (activeHandle === "nw") {
+    const newX = Math.min(pos.x, x + w - minSize);
+    const newY = Math.min(pos.y, y + h - minSize);
+    w = x + w - newX; h = y + h - newY; x = newX; y = newY;
   } else if (activeHandle === "ne") {
-    y = Math.min(pos.y, y + h - minSize);
-    w = Math.max(minSize, pos.x - x);
-    h = currentRoi.y + currentRoi.h - y;
+    const newY = Math.min(pos.y, y + h - minSize);
+    w = Math.max(minSize, pos.x - x); h = y + h - newY; y = newY;
   } else if (activeHandle === "sw") {
-    x = Math.min(pos.x, x + w - minSize);
-    w = currentRoi.x + currentRoi.w - x;
-    h = Math.max(minSize, pos.y - y);
+    const newX = Math.min(pos.x, x + w - minSize);
+    w = x + w - newX; h = Math.max(minSize, pos.y - y); x = newX;
   } else if (activeHandle === "se") {
     w = Math.max(minSize, pos.x - x);
     h = Math.max(minSize, pos.y - y);
@@ -538,6 +510,25 @@ function stopRoiDrag(event) {
   }
   pushRoi();
 }
+
+roiOverlay.addEventListener("pointerdown", (event) => {
+  const handle = event.target?.dataset?.handle;
+  if (handle) {
+    startRoiDrag(handle, event);
+  } else if (event.target === roiBox) {
+    event.preventDefault();
+    event.stopPropagation();
+    isDraggingRoi = true;
+    activeHandle = "move";
+    const pos = clientToRoi(event.clientX, event.clientY);
+    dragOffset = { x: pos.x - currentRoi.x, y: pos.y - currentRoi.y };
+    roiOverlay.setPointerCapture(event.pointerId);
+  }
+});
+roiOverlay.addEventListener("pointermove", dragRoi);
+roiOverlay.addEventListener("pointerup", stopRoiDrag);
+roiOverlay.addEventListener("pointercancel", stopRoiDrag);
+window.addEventListener("resize", updateRoiOverlay);
 
 async function loadCameraOptions() {
   try {
@@ -738,26 +729,13 @@ async function loadRoiOptions() {
     applyRoiLimits();
     syncRoiLabels();
     currentRoi = clampRoi({
-      x: Number(roiX.value),
-      y: Number(roiY.value),
-      w: Number(roiW.value),
-      h: Number(roiH.value),
+      x: Number(roiX.value), y: Number(roiY.value),
+      w: Number(roiW.value), h: Number(roiH.value),
     });
     updateRoiOverlay();
     scheduleRoiPush();
   });
 });
-
-roiOverlay.addEventListener("pointerdown", (event) => {
-  const handle = event.target?.dataset?.handle;
-  if (handle) {
-    startRoiDrag(handle, event);
-  }
-});
-roiOverlay.addEventListener("pointermove", dragRoi);
-roiOverlay.addEventListener("pointerup", stopRoiDrag);
-roiOverlay.addEventListener("pointercancel", stopRoiDrag);
-window.addEventListener("resize", updateRoiOverlay);
 
 loadRoiOptions();
 
