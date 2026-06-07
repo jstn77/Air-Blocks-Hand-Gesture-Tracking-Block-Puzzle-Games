@@ -394,9 +394,18 @@ def game_loop():
             gs["fps"]      = fps_val
 
             if gs["state"] == "PLAYING":
+                is_grab_now = is_grab_active(current_gesture, grab_mode)
+                was_grab_prev = is_grab_active(prev_gesture, grab_mode)
+
+                is_release_now = is_release_active(current_gesture, grab_mode)
+                was_release_prev = is_release_active(prev_gesture, grab_mode)
                 # GRAB
-                if is_grab_active(current_gesture, grab_mode) and gs["held_idx"] == -1:
-                    gesture_stats["grab_total"] +=1
+                if (
+                    is_grab_now
+                    and not was_grab_prev
+                    and gs["held_idx"] == -1
+                ):
+                    gesture_stats["grab_total"] += 1
 
                     for i, b in enumerate(gs["blocks"]):
                         if b["is_alive"]:
@@ -406,9 +415,14 @@ def game_loop():
                                 break
 
                 # DROP
-                elif is_release_active(current_gesture, grab_mode) and gs["held_idx"] != -1:
+                elif (
+                    is_release_now
+                    and not was_release_prev
+                    and gs["held_idx"] != -1
+                ):
                     gesture_stats["drop_total"] += 1
-                    bd     = gs["blocks"][gs["held_idx"]]
+
+                    bd = gs["blocks"][gs["held_idx"]]
                     matrix = bd["matrix"]
                     off_c  = len(matrix[0]) // 2
                     off_r  = len(matrix)    // 2
