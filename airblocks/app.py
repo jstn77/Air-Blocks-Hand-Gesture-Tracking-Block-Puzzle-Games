@@ -5,6 +5,8 @@ import pygame
 import numpy as np
 import json
 import time
+import csv
+import atexit
 import random
 import threading
 from types import SimpleNamespace
@@ -83,6 +85,17 @@ game_state = {
     "cursor_y":    -100,
     "gesture":     "NONE",
     "fps":         0,
+}
+
+# ─── EXPERIMENT METRICS ───────────────────────────────────────────────────────
+
+fps_history = []
+
+gesture_stats = {
+    "grab_total":   0,
+    "grab_success": 0,
+    "drop_total":   0,
+    "drop_success": 0,
 }
 
 # ─── GAME LOGIC HELPERS ───────────────────────────────────────────────────────
@@ -364,7 +377,10 @@ def game_loop():
         # FPS
         fps_count += 1
         if time.time() - fps_timer >= 1.0:
-            fps_val   = fps_count
+            fps_val = fps_count
+
+            fps_history.append(fps_val)
+
             fps_count = 0
             fps_timer = time.time()
 
@@ -380,14 +396,18 @@ def game_loop():
             if gs["state"] == "PLAYING":
                 # GRAB
                 if is_grab_active(current_gesture, grab_mode) and gs["held_idx"] == -1:
+                    gesture_stats["grab_total"] +=1
+
                     for i, b in enumerate(gs["blocks"]):
                         if b["is_alive"]:
                             if abs(cursor_x - b["base_x"]) < 60 and abs(cursor_y - b["base_y"]) < 60:
                                 gs["held_idx"] = i
+                                gesture_stats["grab_success"] += 1
                                 break
 
                 # DROP
                 elif is_release_active(current_gesture, grab_mode) and gs["held_idx"] != -1:
+                    gesture_stats["drop_total"] += 1
                     bd     = gs["blocks"][gs["held_idx"]]
                     matrix = bd["matrix"]
                     off_c  = len(matrix[0]) // 2
@@ -396,6 +416,7 @@ def game_loop():
                     sr, sc = cr - off_r, cc - off_c
 
                     if is_placement_valid(gs["grid"], matrix, sr, sc):
+                        gesture_stats["drop_success"] += 1
                         place_block(gs["grid"], matrix, sr, sc, bd["color"])
                         gs["score"] += check_and_clear_lines(gs["grid"])
                         bd["is_alive"] = False
@@ -584,5 +605,79 @@ def roi_select():
 
     return jsonify({"ok": True, "current": safe_roi})
 
+def save_experiment_results():
+
+    avg_fps = 0
+
+    if len(fps_history) > 0:
+        avg_fps = sum(fps_history) / len(fps_history)
+
+    grab_accuracy = 0
+    drop_accuracy = 0
+
+    if gesture_stats["grab_total"] > 0:
+        grab_accuracy = (
+            gesture_stats["grab_success"]
+            / gesture_stats["grab_total"]
+        ) * 100
+
+    overall_success = 0
+
+    total_attempts = (
+        gesture_stats["grab_total"] +
+        gesture_stats["drop_total"]
+    )
+
+    total_success = (
+        gesture_stats["grab_success"] +
+        gesture_stats["drop_success"]
+    )
+
+    if total_attempts > 0:
+        overall_success = (
+            total_success /
+            total_attempts
+        ) * 100
+
+    output_file = os.path.abspath("experiment_results.csv")    
+
+    print("Saving to:", output_file)
+
+    with open(output_file, "w", newline="") as f:
+
+        writer = csv.writer(f)
+
+        writer.writerow(["Metric", "Value"])
+
+        writer.writerow(["Average FPS", round(avg_fps, 2)])
+
+        writer.writerow(["Grab Total", gesture_stats["grab_total"]])
+
+        writer.writerow(["Grab Success", gesture_stats["grab_success"]])
+
+        writer.writerow(["Grab Accuracy (%)", round(grab_accuracy, 2)])
+
+        writer.writerow(["Drop Total", gesture_stats["drop_total"]])
+
+        writer.writerow(["Drop Success", gesture_stats["drop_success"]])
+
+        writer.writerow(["Drop Accuracy (%)", round(drop_accuracy, 2)])
+
+        writer.writerow([
+    "Overall Success Rate (%)",
+    round(overall_success, 2)
+])
+    print("Experiment results saved.")
+
+@app.route("/save_results")
+def save_results():
+
+    save_experiment_results()
+
+    return jsonify({
+        "status": "success",
+        "message": "Experiment results saved."
+    })
+atexit.register(save_experiment_results)
 if __name__ == "__main__":
     app.run(debug=False, threaded=True, host="0.0.0.0", port=5000)
