@@ -1,0 +1,972 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>AirBlocks — Gesture Puzzle</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:       #0a0a0f;
+    --surface:  #111118;
+    --border:   #1e1e2e;
+    --accent:   #00E5FF;
+    --accent2:  #FFD600;
+    --text:     #e0e0f0;
+    --muted:    #555570;
+    --red:      #FF5252;
+    --green:    #69F0AE;
+    --cell:     50px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Share Tech Mono', monospace;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 16px 40px;
+    gap: 0;
+  }
+
+  /* ── HEADER ── */
+  header {
+    width: 100%;
+    max-width: 860px;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding-bottom: 18px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 24px;
+  }
+  header h1 {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 1.9rem;
+    font-weight: 900;
+    letter-spacing: 0.12em;
+    color: var(--accent);
+    text-shadow: 0 0 20px rgba(0,229,255,0.4);
+  }
+  header h1 span { color: var(--accent2); }
+  .tagline { font-size: 0.72rem; color: var(--muted); letter-spacing: 0.15em; }
+
+  /* ── MAIN LAYOUT ── */
+  .column {
+    width: 100%;
+    max-width: 1180px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  .main-layout {
+    display: grid;
+    grid-template-columns: minmax(320px, 1fr) minmax(460px, 1fr);
+    gap: 20px;
+    align-items: start;
+  }
+  .left-pane,
+  .right-pane {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    min-width: 0;
+  }
+
+  /* ── CAMERA PANEL ── */
+  .camera-panel {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: visible;
+    position: relative;
+  }
+  .panel-label {
+    position: absolute;
+    top: 10px; left: 14px;
+    font-size: 0.65rem;
+    letter-spacing: 0.2em;
+    color: var(--muted);
+    text-transform: uppercase;
+    z-index: 2;
+    background: rgba(10,10,15,0.6);
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+  .camera-panel img {
+    width: 100%;
+    display: block;
+    border-radius: 12px;
+    /* mirror already done server-side, no need to flip */
+  }
+  .gesture-badge {
+    position: absolute;
+    bottom: 12px; right: 14px;
+    font-size: 0.7rem;
+    letter-spacing: 0.18em;
+    padding: 4px 12px;
+    border-radius: 20px;
+    background: rgba(10,10,15,0.75);
+    border: 1px solid var(--muted);
+    transition: border-color 0.2s, color 0.2s;
+  }
+  .gesture-badge.OPEN   { border-color: var(--green); color: var(--green); }
+  .gesture-badge.CLOSED { border-color: var(--red);   color: var(--red);   }
+  .gesture-badge.PINCH  { border-color: var(--accent2); color: var(--accent2); }
+  .gesture-badge.PINCH3 { border-color: var(--accent2); color: var(--accent2); }
+  .gesture-badge.THREE  { border-color: var(--green); color: var(--green); }
+  .gesture-badge.TWO    { border-color: var(--accent2); color: var(--accent2); }
+  .gesture-badge.NONE   { border-color: var(--muted); color: var(--muted); }
+
+  .roi-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+  .roi-box {
+    position: absolute;
+    border: 2px solid #00ff66;
+    box-shadow: 0 0 0 1px rgba(0,255,102,0.15), 0 0 18px rgba(0,255,102,0.22);
+    background: rgba(0,255,102,0.04);
+    pointer-events: auto;
+    touch-action: none;
+    cursor: move;
+  }
+  .roi-handle {
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    border-radius: 999px;
+    background: #00ff66;
+    box-shadow: 0 0 10px rgba(0,255,102,0.7);
+    pointer-events: auto;
+    touch-action: none;
+  }
+  .roi-handle.nw { left: 0; top: 0;       cursor: nwse-resize; transform: translate(-50%, -50%); }
+  .roi-handle.ne { right: 0; top: 0;      cursor: nesw-resize; transform: translate(50%, -50%); }
+  .roi-handle.sw { left: 0; bottom: 0;    cursor: nesw-resize; transform: translate(-50%, 50%); }
+  .roi-handle.se { right: 0; bottom: 0;   cursor: nwse-resize; transform: translate(50%, 50%); }
+
+  .camera-controls {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    gap: 8px 10px;
+  }
+  .camera-controls label {
+    font-size: 0.65rem;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+  .camera-controls select {
+    width: 100%;
+    background: #0f0f18;
+    color: var(--text);
+    border: 1px solid #2b2b42;
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.9rem;
+  }
+  .camera-status {
+    grid-column: 1 / -1;
+    font-size: 0.72rem;
+    color: var(--muted);
+  }
+  .roi-grid {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 6px 8px;
+    margin-top: 4px;
+  }
+  .roi-grid input[type="range"] {
+    width: 100%;
+  }
+  .roi-grid .roi-val {
+    min-width: 34px;
+    text-align: right;
+    font-size: 0.72rem;
+    color: var(--accent);
+  }
+
+  /* ── STATS ROW ── */
+  .stats-row {
+    width: 100%;
+    display: flex;
+    gap: 12px;
+  }
+  .stat-card {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .stat-label { font-size: 0.6rem; color: var(--muted); letter-spacing: 0.2em; text-transform: uppercase; }
+  .stat-value { font-family: 'Orbitron', sans-serif; font-size: 1.3rem; color: var(--accent2); }
+  .stat-value.fps-ok  { color: var(--green); }
+  .stat-value.fps-bad { color: var(--red); }
+
+  /* ── GAME PANEL ── */
+  .game-panel {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    position: relative;
+  }
+  .game-panel .panel-label { position: static; background: none; padding: 0; }
+
+  canvas#gameCanvas {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: #080810;
+    cursor: none;
+    image-rendering: pixelated;
+    width: 100%;
+    max-width: 840px;
+    height: auto;
+  }
+
+  /* ── GAME OVER OVERLAY (drawn on canvas, but also dim the panel) ── */
+  .game-panel.over { border-color: var(--red); box-shadow: 0 0 30px rgba(255,82,82,0.15); }
+
+  /* ── INSTRUCTIONS ── */
+  .instructions {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 20px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 30px;
+  }
+  .instructions h3 { grid-column: 1/-1; font-size: 0.65rem; color: var(--muted); letter-spacing: 0.2em; margin-bottom: 4px; }
+  .tip { font-size: 0.72rem; color: var(--text); display: flex; gap: 8px; align-items: center; }
+  .tip-icon { color: var(--accent); width: 18px; text-align: center; }
+
+  /* ── SCANLINE OVERLAY ── */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background: repeating-linear-gradient(0deg,
+      transparent, transparent 2px,
+      rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px);
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  @media (max-width: 980px) {
+    header {
+      max-width: 100%;
+    }
+    .main-layout {
+      grid-template-columns: 1fr;
+    }
+    .instructions {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Air<span>Blocks</span></h1>
+  <div class="tagline">gesture-controlled puzzle engine</div>
+</header>
+
+<div class="column">
+
+  <div class="main-layout">
+
+    <div class="left-pane">
+
+  <!-- CAMERA -->
+  <div class="camera-panel" id="cameraPanel">
+    <div class="panel-label">📷 HAND TRACKING</div>
+    <img src="/camera" alt="webcam feed" id="camFeed"/>
+    <div class="roi-overlay" id="roiOverlay">
+      <div class="roi-box" id="roiBox">
+        <div class="roi-handle nw" data-handle="nw"></div>
+        <div class="roi-handle ne" data-handle="ne"></div>
+        <div class="roi-handle sw" data-handle="sw"></div>
+        <div class="roi-handle se" data-handle="se"></div>
+      </div>
+    </div>
+    <div class="gesture-badge NONE" id="gestureBadge">NONE</div>
+  </div>
+
+  <div class="camera-controls">
+    <label for="cameraSelect">Camera</label>
+    <select id="cameraSelect"></select>
+    <label for="gestureSelect">Grab Gesture</label>
+    <select id="gestureSelect"></select>
+    <div class="roi-grid">
+      <label for="roiX">ROI X</label>
+      <input id="roiX" type="range" min="0" max="640" step="1" value="80" />
+      <span class="roi-val" id="roiXVal">80</span>
+
+      <label for="roiY">ROI Y</label>
+      <input id="roiY" type="range" min="0" max="480" step="1" value="40" />
+      <span class="roi-val" id="roiYVal">40</span>
+
+      <label for="roiW">ROI W</label>
+      <input id="roiW" type="range" min="80" max="640" step="1" value="480" />
+      <span class="roi-val" id="roiWVal">480</span>
+
+      <label for="roiH">ROI H</label>
+      <input id="roiH" type="range" min="80" max="480" step="1" value="360" />
+      <span class="roi-val" id="roiHVal">360</span>
+    </div>
+    <div class="camera-status" id="roiStatus">Loading ROI controls...</div>
+    <div class="camera-status" id="gestureStatus">Loading gesture options...</div>
+    <div class="camera-status" id="cameraStatus">Loading camera list...</div>
+  </div>
+
+    </div>
+
+    <div class="right-pane">
+
+  <!-- STATS -->
+  <div class="stats-row">
+    <div class="stat-card">
+      <div class="stat-label">Score</div>
+      <div class="stat-value" id="scoreVal">0</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">FPS</div>
+      <div class="stat-value fps-ok" id="fpsVal">--</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Status</div>
+      <div class="stat-value" id="statusVal" style="font-size:0.85rem;color:var(--green)">PLAYING</div>
+    </div>
+  </div>
+
+  <!-- GAME CANVAS -->
+  <div class="game-panel" id="gamePanel">
+    <div class="panel-label" style="color:var(--muted);font-size:0.6rem;letter-spacing:0.2em;">GAME BOARD</div>
+    <canvas id="gameCanvas" width="840" height="620"></canvas>
+  </div>
+
+    </div>
+
+  </div>
+
+  <!-- INSTRUCTIONS -->
+  <div class="instructions">
+    <h3>HOW TO PLAY</h3>
+    <div class="tip"><span class="tip-icon">✊</span>Fist mode — fist to GRAB, open hand to DROP</div>
+    <div class="tip"><span class="tip-icon">🤏</span>Pinch mode — 2 or 3 finger pinch to GRAB, 2 or 3 fingers open to DROP</div>
+    <div class="tip"><span class="tip-icon">↔</span>Move hand to aim at grid cell</div>
+    <div class="tip"><span class="tip-icon">✦</span>Clear full rows or columns for points</div>
+  </div>
+
+</div><!-- .column -->
+
+<script>
+// ── CONFIG ──────────────────────────────────────────────────────────────────
+const GRID   = {{ grid_size }};
+const CELL   = {{ cell_size }};
+const COLORS = {{ colors | safe }};
+const SCREEN_W = {{ screen_w }};
+const SCREEN_H = {{ screen_h }};
+const GRID_ORIGIN_X = {{ grid_origin_x }};
+const GRID_ORIGIN_Y = {{ grid_origin_y }};
+const BLOCK_SLOT_Y = {{ block_slot_y }};
+
+const canvas = document.getElementById("gameCanvas");
+const ctx    = canvas.getContext("2d");
+canvas.width  = SCREEN_W;
+canvas.height = SCREEN_H;
+
+const cameraSelect = document.getElementById("cameraSelect");
+const cameraStatus = document.getElementById("cameraStatus");
+const gestureSelect = document.getElementById("gestureSelect");
+const gestureStatus = document.getElementById("gestureStatus");
+const roiX = document.getElementById("roiX");
+const roiY = document.getElementById("roiY");
+const roiW = document.getElementById("roiW");
+const roiH = document.getElementById("roiH");
+const roiXVal = document.getElementById("roiXVal");
+const roiYVal = document.getElementById("roiYVal");
+const roiWVal = document.getElementById("roiWVal");
+const roiHVal = document.getElementById("roiHVal");
+const roiStatus = document.getElementById("roiStatus");
+const roiOverlay = document.getElementById("roiOverlay");
+const roiBox = document.getElementById("roiBox");
+
+let currentRoi = { x: 80, y: 40, w: 480, h: 360 };
+let isDraggingRoi = false;
+let activeHandle = null;
+let dragOffset = { x: 0, y: 0 };
+
+function getCameraScale() {
+  const rect = document.getElementById("cameraPanel").getBoundingClientRect();
+  return { scaleX: rect.width / 640, scaleY: rect.height / 480, rect };
+}
+
+function clampRoi(roi) {
+  const minSize = 80;
+  const x = Math.max(0, Math.min(roi.x, 640 - minSize));
+  const y = Math.max(0, Math.min(roi.y, 480 - minSize));
+  const w = Math.max(minSize, Math.min(roi.w, 640 - x));
+  const h = Math.max(minSize, Math.min(roi.h, 480 - y));
+  return { x, y, w, h };
+}
+
+function setRoiInputs(roi) {
+  roiX.value = String(roi.x);
+  roiY.value = String(roi.y);
+  roiW.value = String(roi.w);
+  roiH.value = String(roi.h);
+  syncRoiLabels();
+}
+
+function updateRoiOverlay() {
+  const rect = document.getElementById("cameraPanel").getBoundingClientRect();
+  if (!rect.width || !rect.height) return;  // image not yet rendered
+  const scaleX = rect.width / 640;
+  const scaleY = rect.height / 480;
+  roiBox.style.left   = `${currentRoi.x * scaleX}px`;
+  roiBox.style.top    = `${currentRoi.y * scaleY}px`;
+  roiBox.style.width  = `${currentRoi.w * scaleX}px`;
+  roiBox.style.height = `${currentRoi.h * scaleY}px`;
+}
+
+function clientToRoi(clientX, clientY) {
+  const rect = document.getElementById("cameraPanel").getBoundingClientRect();
+  return {
+    x: ((clientX - rect.left) / rect.width)  * 640,
+    y: ((clientY - rect.top)  / rect.height) * 480,
+  };
+}
+
+function startRoiDrag(handle, event) {
+  event.preventDefault();
+  event.stopPropagation();
+  isDraggingRoi = true;
+  activeHandle = handle;
+  roiOverlay.setPointerCapture(event.pointerId);
+}
+
+function dragRoi(event) {
+  if (!isDraggingRoi) return;
+  const pos = clientToRoi(event.clientX, event.clientY);
+  const minSize = 80;
+  let { x, y, w, h } = currentRoi;
+
+  if (activeHandle === "move") {
+    // Clamp position only — size never changes when moving to the edge.
+    currentRoi = {
+      x: Math.max(0, Math.min(pos.x - dragOffset.x, 640 - w)),
+      y: Math.max(0, Math.min(pos.y - dragOffset.y, 480 - h)),
+      w, h,
+    };
+  } else {
+    if (activeHandle === "nw") {
+      const newX = Math.min(pos.x, x + w - minSize);
+      const newY = Math.min(pos.y, y + h - minSize);
+      w = x + w - newX; h = y + h - newY; x = newX; y = newY;
+    } else if (activeHandle === "ne") {
+      const newY = Math.min(pos.y, y + h - minSize);
+      w = Math.max(minSize, pos.x - x); h = y + h - newY; y = newY;
+    } else if (activeHandle === "sw") {
+      const newX = Math.min(pos.x, x + w - minSize);
+      w = x + w - newX; h = Math.max(minSize, pos.y - y); x = newX;
+    } else if (activeHandle === "se") {
+      w = Math.max(minSize, pos.x - x);
+      h = Math.max(minSize, pos.y - y);
+    }
+    currentRoi = clampRoi({ x, y, w, h });
+  }
+  setRoiInputs(currentRoi);
+  updateRoiOverlay();
+  scheduleRoiPush();
+}
+
+function stopRoiDrag(event) {
+  if (!isDraggingRoi) return;
+  isDraggingRoi = false;
+  activeHandle = null;
+  if (roiOverlay.hasPointerCapture(event.pointerId)) {
+    roiOverlay.releasePointerCapture(event.pointerId);
+  }
+  pushRoi();
+}
+
+roiOverlay.addEventListener("pointerdown", (event) => {
+  const handle = event.target?.dataset?.handle;
+  if (handle) {
+    startRoiDrag(handle, event);
+  } else if (event.target === roiBox) {
+    event.preventDefault();
+    event.stopPropagation();
+    isDraggingRoi = true;
+    activeHandle = "move";
+    const pos = clientToRoi(event.clientX, event.clientY);
+    dragOffset = { x: pos.x - currentRoi.x, y: pos.y - currentRoi.y };
+    roiOverlay.setPointerCapture(event.pointerId);
+  }
+});
+roiOverlay.addEventListener("pointermove", dragRoi);
+roiOverlay.addEventListener("pointerup", stopRoiDrag);
+roiOverlay.addEventListener("pointercancel", stopRoiDrag);
+window.addEventListener("resize", updateRoiOverlay);
+// Re-position overlay whenever the camera panel changes size (e.g. first MJPEG frame arriving).
+new ResizeObserver(updateRoiOverlay).observe(document.getElementById("cameraPanel"));
+
+async function loadCameraOptions() {
+  try {
+    const res = await fetch("/camera/options");
+    if (!res.ok) throw new Error("Failed to load camera options");
+    const data = await res.json();
+
+    cameraSelect.innerHTML = "";
+    data.options.forEach((opt) => {
+      const option = document.createElement("option");
+      option.value = String(opt.index);
+      option.textContent = opt.label;
+      cameraSelect.appendChild(option);
+    });
+
+    cameraSelect.value = String(data.current);
+    cameraStatus.textContent = `Current: Camera ${data.current}`;
+  } catch (err) {
+    cameraStatus.textContent = "Could not load camera list.";
+  }
+}
+
+cameraSelect.addEventListener("change", async (event) => {
+  const selected = Number(event.target.value);
+  cameraSelect.disabled = true;
+  cameraStatus.textContent = `Switching to Camera ${selected}...`;
+
+  try {
+    const res = await fetch("/camera/select", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ index: selected }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      cameraStatus.textContent = data.message || "Camera switch failed.";
+      await loadCameraOptions();
+      return;
+    }
+    cameraStatus.textContent = `Current: Camera ${data.current}`;
+  } catch (err) {
+    cameraStatus.textContent = "Camera switch failed.";
+    await loadCameraOptions();
+  } finally {
+    cameraSelect.disabled = false;
+  }
+});
+
+loadCameraOptions();
+
+async function loadGestureOptions() {
+  try {
+    const res = await fetch("/gesture/options");
+    if (!res.ok) throw new Error("Failed to load gesture options");
+    const data = await res.json();
+
+    gestureSelect.innerHTML = "";
+    data.options.forEach((opt) => {
+      const option = document.createElement("option");
+      option.value = String(opt.value);
+      option.textContent = opt.label;
+      gestureSelect.appendChild(option);
+    });
+
+    gestureSelect.value = String(data.current);
+    const selected = data.options.find((opt) => opt.value === data.current);
+    gestureStatus.textContent = `Current: ${selected ? selected.label : data.current}`;
+  } catch (err) {
+    gestureStatus.textContent = "Could not load gesture options.";
+  }
+}
+
+gestureSelect.addEventListener("change", async (event) => {
+  const selected = String(event.target.value);
+  gestureSelect.disabled = true;
+  gestureStatus.textContent = "Switching gesture mode...";
+
+  try {
+    const res = await fetch("/gesture/select", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: selected }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      gestureStatus.textContent = data.message || "Gesture switch failed.";
+      await loadGestureOptions();
+      return;
+    }
+    gestureStatus.textContent = `Current: ${data.label}`;
+  } catch (err) {
+    gestureStatus.textContent = "Gesture switch failed.";
+    await loadGestureOptions();
+  } finally {
+    gestureSelect.disabled = false;
+  }
+});
+
+loadGestureOptions();
+
+function syncRoiLabels() {
+  roiXVal.textContent = roiX.value;
+  roiYVal.textContent = roiY.value;
+  roiWVal.textContent = roiW.value;
+  roiHVal.textContent = roiH.value;
+}
+
+function applyRoiLimits() {
+  const maxX = Math.max(0, Number(roiX.max));
+  const maxY = Math.max(0, Number(roiY.max));
+  let x = Number(roiX.value);
+  let y = Number(roiY.value);
+  let w = Number(roiW.value);
+  let h = Number(roiH.value);
+
+  if (x + w > 640) {
+    if (x > maxX) x = maxX;
+    w = Math.min(w, 640 - x);
+  }
+  if (y + h > 480) {
+    if (y > maxY) y = maxY;
+    h = Math.min(h, 480 - y);
+  }
+
+  roiX.value = String(Math.max(0, x));
+  roiY.value = String(Math.max(0, y));
+  roiW.value = String(Math.max(80, w));
+  roiH.value = String(Math.max(80, h));
+}
+
+let roiDebounceTimer = null;
+
+async function pushRoi() {
+  applyRoiLimits();
+  syncRoiLabels();
+
+  const payload = {
+    x: Number(roiX.value),
+    y: Number(roiY.value),
+    w: Number(roiW.value),
+    h: Number(roiH.value),
+  };
+
+  try {
+    const res = await fetch("/roi/select", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      roiStatus.textContent = data.message || "ROI update failed.";
+      return;
+    }
+    roiStatus.textContent = `ROI set to x:${data.current.x}, y:${data.current.y}, w:${data.current.w}, h:${data.current.h}`;
+  } catch (err) {
+    roiStatus.textContent = "ROI update failed.";
+  }
+}
+
+function scheduleRoiPush() {
+  if (roiDebounceTimer) {
+    clearTimeout(roiDebounceTimer);
+  }
+  roiDebounceTimer = setTimeout(pushRoi, 140);
+}
+
+async function loadRoiOptions() {
+  try {
+    const res = await fetch("/roi/options");
+    if (!res.ok) throw new Error("Failed to load ROI");
+    const data = await res.json();
+
+    roiX.min = String(data.limits.x.min);
+    roiX.max = String(data.limits.x.max);
+    roiY.min = String(data.limits.y.min);
+    roiY.max = String(data.limits.y.max);
+    roiW.min = String(data.limits.w.min);
+    roiW.max = String(data.limits.w.max);
+    roiH.min = String(data.limits.h.min);
+    roiH.max = String(data.limits.h.max);
+
+    roiX.value = String(data.current.x);
+    roiY.value = String(data.current.y);
+    roiW.value = String(data.current.w);
+    roiH.value = String(data.current.h);
+    currentRoi = clampRoi(data.current);
+    syncRoiLabels();
+    updateRoiOverlay();
+    roiStatus.textContent = `ROI set to x:${data.current.x}, y:${data.current.y}, w:${data.current.w}, h:${data.current.h}`;
+  } catch (err) {
+    roiStatus.textContent = "Could not load ROI controls.";
+  }
+}
+
+[roiX, roiY, roiW, roiH].forEach((el) => {
+  el.addEventListener("input", () => {
+    applyRoiLimits();
+    syncRoiLabels();
+    currentRoi = clampRoi({
+      x: Number(roiX.value), y: Number(roiY.value),
+      w: Number(roiW.value), h: Number(roiH.value),
+    });
+    updateRoiOverlay();
+    scheduleRoiPush();
+  });
+});
+
+loadRoiOptions();
+
+// ── DRAW HELPERS ────────────────────────────────────────────────────────────
+function hexToRgba(hex, alpha=1) {
+  const r = parseInt(hex.slice(1,3),16);
+  const g = parseInt(hex.slice(3,5),16);
+  const b = parseInt(hex.slice(5,7),16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function drawGrid(grid) {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Background
+  ctx.fillStyle = "#080810";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Grid backing plate
+  ctx.fillStyle = "rgba(20,20,34,0.65)";
+  ctx.fillRect(GRID_ORIGIN_X, GRID_ORIGIN_Y, GRID * CELL, GRID * CELL);
+
+  // Block container below the board
+  const containerY = GRID_ORIGIN_Y + GRID * CELL + 12;
+  const containerH = SCREEN_H - containerY - 12;
+  ctx.fillStyle = "rgba(14,14,24,0.92)";
+  ctx.fillRect(12, containerY, SCREEN_W - 24, containerH);
+  ctx.strokeStyle = "rgba(90,100,140,0.45)";
+  ctx.lineWidth = 1.2;
+  ctx.strokeRect(12.5, containerY + 0.5, SCREEN_W - 25, containerH - 1);
+
+  // Grid lines
+  ctx.strokeStyle = "#1a1a2e";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= GRID; i++) {
+    const x = GRID_ORIGIN_X + i * CELL;
+    const y = GRID_ORIGIN_Y + i * CELL;
+    ctx.beginPath(); ctx.moveTo(x, GRID_ORIGIN_Y);          ctx.lineTo(x, GRID_ORIGIN_Y + GRID * CELL); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(GRID_ORIGIN_X, y);          ctx.lineTo(GRID_ORIGIN_X + GRID * CELL, y); ctx.stroke();
+  }
+
+  // Filled cells
+  for (let r = 0; r < GRID; r++) {
+    for (let c = 0; c < GRID; c++) {
+      const color = grid[r][c];
+      if (color && COLORS[color]) {
+        const hex = COLORS[color];
+        const x = GRID_ORIGIN_X + c * CELL;
+        const y = GRID_ORIGIN_Y + r * CELL;
+
+        // Fill
+        ctx.fillStyle = hexToRgba(hex, 0.85);
+        ctx.fillRect(x+1, y+1, CELL-2, CELL-2);
+
+        // Shine
+        const grad = ctx.createLinearGradient(x, y, x, y+CELL);
+        grad.addColorStop(0,   hexToRgba(hex, 0.35));
+        grad.addColorStop(1,   hexToRgba(hex, 0));
+        ctx.fillStyle = grad;
+        ctx.fillRect(x+2, y+2, CELL-4, (CELL-4)/2);
+
+        // Border highlight
+        ctx.strokeStyle = hexToRgba(hex, 0.9);
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(x+1.5, y+1.5, CELL-3, CELL-3);
+      }
+    }
+  }
+}
+
+function drawBlockSlots(blocks) {
+  blocks.forEach((b) => {
+    if (!b.is_alive) return;
+    const rows = b.matrix.length;
+    const cols = b.matrix[0].length;
+    const ox = b.base_x - Math.floor(cols * CELL / 2);
+    const oy = b.base_y - Math.floor(rows * CELL / 2);
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (!b.matrix[r][c]) continue;
+        const cx = ox + c * CELL;
+        const cy = oy + r * CELL;
+        ctx.fillStyle = "rgba(255,255,255,0.07)";
+        ctx.strokeStyle = "rgba(140,160,210,0.30)";
+        ctx.lineWidth = 1;
+        ctx.fillRect(cx + 1, cy + 1, CELL - 2, CELL - 2);
+        ctx.strokeRect(cx + 1.5, cy + 1.5, CELL - 3, CELL - 3);
+      }
+    }
+  });
+}
+
+function drawBlock(matrix, px, py, colorKey, alpha=1) {
+  const hex = COLORS[colorKey] || "#888";
+  for (let r = 0; r < matrix.length; r++) {
+    for (let c = 0; c < matrix[r].length; c++) {
+      if (matrix[r][c]) {
+        const x = px + c*CELL - Math.floor(matrix[r].length * CELL / 2);
+        const y = py + r*CELL - Math.floor(matrix.length * CELL / 2);
+        ctx.fillStyle = hexToRgba(hex, 0.8*alpha);
+        ctx.fillRect(x+2, y+2, CELL-4, CELL-4);
+        ctx.strokeStyle = hexToRgba(hex, alpha);
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(x+2.5, y+2.5, CELL-5, CELL-5);
+      }
+    }
+  }
+}
+
+function drawCursor(cx, cy, gesture) {
+  if (cx < 0) return;
+  const color = gesture === "CLOSED" ? "#FF5252" : (gesture === "OPEN" ? "#69F0AE" : "#888");
+  ctx.beginPath();
+  ctx.arc(cx, cy, 8, 0, Math.PI*2);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.fillStyle = hexToRgba(color, 0.3);
+  ctx.fill();
+}
+
+function drawGameOver(score) {
+  // Dim
+  ctx.fillStyle = "rgba(5,5,12,0.82)";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Title
+  ctx.font = "bold 28px 'Orbitron', sans-serif";
+  ctx.fillStyle = "#FF5252";
+  ctx.textAlign = "center";
+  ctx.fillText("GAME OVER", canvas.width/2, canvas.height/2 - 50);
+
+  ctx.font = "14px 'Share Tech Mono', monospace";
+  ctx.fillStyle = "#e0e0f0";
+  ctx.fillText(`SCORE: ${score}`, canvas.width/2, canvas.height/2 - 18);
+
+  // Retry button
+  ctx.fillStyle = "#69F0AE";
+  ctx.beginPath();
+  ctx.roundRect(canvas.width/2-120, canvas.height/2+10, 100, 42, 8);
+  ctx.fill();
+  ctx.font = "13px 'Orbitron', sans-serif";
+  ctx.fillStyle = "#080810";
+  ctx.fillText("RETRY", canvas.width/2-70, canvas.height/2+36);
+
+  // Exit button
+  ctx.fillStyle = "#FF5252";
+  ctx.beginPath();
+  ctx.roundRect(canvas.width/2+20, canvas.height/2+10, 100, 42, 8);
+  ctx.fill();
+  ctx.fillStyle = "#fff";
+  ctx.fillText("EXIT", canvas.width/2+70, canvas.height/2+36);
+
+  ctx.textAlign = "left";
+}
+
+// ── RENDER LOOP ─────────────────────────────────────────────────────────────
+function render(data) {
+  drawGrid(data.grid);
+  drawBlockSlots(data.blocks);
+
+  if (data.state === "PLAYING") {
+    // Stationary blocks
+    data.blocks.forEach((b, i) => {
+      if (b.is_alive && i !== data.held_idx) {
+        drawBlock(b.matrix, b.base_x, b.base_y, b.color);
+      }
+    });
+    // Held block follows cursor
+    if (data.held_idx !== -1) {
+      const b = data.blocks[data.held_idx];
+      drawBlock(b.matrix, data.cursor_x, data.cursor_y, b.color, 0.75);
+    }
+    drawCursor(data.cursor_x, data.cursor_y, data.gesture);
+
+  } else if (data.state === "GAME_OVER") {
+    drawGameOver(data.score);
+    drawCursor(data.cursor_x, data.cursor_y, data.gesture);
+  }
+}
+
+// ── SSE ─────────────────────────────────────────────────────────────────────
+const sse = new EventSource("/state");
+
+sse.onmessage = (e) => {
+  const data = JSON.parse(e.data);
+
+  // Update stats
+  document.getElementById("scoreVal").textContent = data.score;
+
+  const fpsEl = document.getElementById("fpsVal");
+  fpsEl.textContent = data.fps;
+  fpsEl.className = "stat-value " + (data.fps < 20 ? "fps-bad" : "fps-ok");
+
+  const statusEl = document.getElementById("statusVal");
+  statusEl.textContent = data.state;
+  statusEl.style.color = data.state === "PLAYING" ? "var(--green)" : "var(--red)";
+
+  const badge = document.getElementById("gestureBadge");
+  badge.textContent = data.gesture;
+  badge.className = `gesture-badge ${data.gesture}`;
+
+  if (data.grab_mode) {
+    gestureSelect.value = data.grab_mode;
+  }
+
+  const panel = document.getElementById("gamePanel");
+  panel.className = "game-panel" + (data.state === "GAME_OVER" ? " over" : "");
+
+  render(data);
+};
+
+sse.onerror = () => {
+  ctx.fillStyle = "rgba(5,5,12,0.9)";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.font = "13px 'Share Tech Mono', monospace";
+  ctx.fillStyle = "#FF5252";
+  ctx.textAlign = "center";
+  ctx.fillText("⚠ Connection lost — is the server running?", canvas.width/2, canvas.height/2);
+  ctx.textAlign = "left";
+};
+</script>
+</body>
+</html>
