@@ -26,11 +26,9 @@ SCREEN_H = 724          # grid(500) + gap(12) + container(200) + gap(12)
 GRID_ORIGIN_X = 0
 GRID_ORIGIN_Y = 0
 BLOCK_SLOT_Y = 612      # center of 200 px container: 512 + 100
-# Y axis mapping: grid top (y=0) sits at 15 % of ROI, block tray (y=560) at 70 %.
-# Anything outside those bands is clamped by the game loop.
+
 CURSOR_Y_RANGE  = int(BLOCK_SLOT_Y / (0.70 - 0.15))   # ~1018
 CURSOR_Y_OFFSET = int(-0.15 * CURSOR_Y_RANGE)           # ~-153
-# X axis: 15 % dead zone on each side (symmetric).
 CURSOR_X_RANGE  = int(SCREEN_W / (1.0 - 2 * 0.15))    # ~714
 CURSOR_X_OFFSET = int(-0.15 * CURSOR_X_RANGE)           # ~-107
 GRAB_MODES = {
@@ -88,9 +86,7 @@ game_state = {
 }
 
 # ─── EXPERIMENT METRICS ───────────────────────────────────────────────────────
-
 fps_history = []
-
 gesture_stats = {
     "grab_total":   0,
     "grab_success": 0,
@@ -136,11 +132,10 @@ def place_block(grid, matrix, start_row, start_col, color):
                 grid[start_row + r][start_col + c] = color
 
 def check_and_clear_lines(grid):
-    # Collect both axes before clearing so combos are detected on the same state.
     rows_to_clear = [r for r in range(GRID_SIZE) if all(grid[r][c] != 0 for c in range(GRID_SIZE))]
     cols_to_clear = [c for c in range(GRID_SIZE) if all(grid[r][c] != 0 for r in range(GRID_SIZE))]
     for r in rows_to_clear:
-        grid[r] = [0] * GRID_SIZE          # zero in-place; no gravity / row shift
+        grid[r] = [0] * GRID_SIZE
     for c in cols_to_clear:
         for r in range(GRID_SIZE):
             grid[r][c] = 0
@@ -178,15 +173,19 @@ hand_landmarker = vision.HandLandmarker.create_from_options(
         min_tracking_confidence=0.7,
     )
 )
+
 CAM_W, CAM_H = 640, 480
 cap_lock = threading.Lock()
 current_camera_index = CAMERA_INDEX
 
 def create_camera_capture(index):
-    cam = cv2.VideoCapture(index)
+    # Menggunakan CAP_DSHOW agar kamera di Windows tidak noise/error
+    cam = cv2.VideoCapture(index, cv2.CAP_DSHOW)
     if not cam.isOpened():
-        cam.release()
-        return None
+        # Fallback normal jika DSHOW gagal
+        cam = cv2.VideoCapture(index)
+        if not cam.isOpened():
+            return None
     cam.set(cv2.CAP_PROP_FRAME_WIDTH,  CAM_W)
     cam.set(cv2.CAP_PROP_FRAME_HEIGHT, CAM_H)
     return cam
@@ -198,10 +197,9 @@ if cap is None and CAMERA_INDEX != 0:
 if cap is None:
     raise RuntimeError("Could not open any camera input.")
 
-CURSOR_ALPHA = 0.35  # EMA smoothing — lower = smoother but more lag
+CURSOR_ALPHA = 0.35
 
 def get_cursor_position(roi_landmarks):
-    """Map ROI-relative landmark[9] (0-1 within the ROI) to game screen coords."""
     lm = roi_landmarks[9]
     x = int(lm.x * CURSOR_X_RANGE) + CURSOR_X_OFFSET
     y = int(lm.y * CURSOR_Y_RANGE) + CURSOR_Y_OFFSET
@@ -210,8 +208,7 @@ def get_cursor_position(roi_landmarks):
 def get_finger_open_count(landmarks):
     tips  = [8, 12, 16, 20]
     pips  = [6, 10, 14, 18]
-    return sum(1 for t, p in zip(tips, pips)
-               if landmarks[t].y < landmarks[p].y)
+    return sum(1 for t, p in zip(tips, pips) if landmarks[t].y < landmarks[p].y)
 
 def is_pinch(landmarks, threshold=0.06):
     thumb_tip = landmarks[4]
@@ -222,7 +219,6 @@ def is_pinch(landmarks, threshold=0.06):
     return dist_sq <= (threshold * threshold)
 
 def is_three_finger_pinch(landmarks, threshold=0.07):
-    # Thumb tip close to both index and middle tips simultaneously.
     thumb = landmarks[4]
     index = landmarks[8]
     middle = landmarks[12]
@@ -231,18 +227,14 @@ def is_three_finger_pinch(landmarks, threshold=0.07):
     return di_sq <= threshold**2 and dm_sq <= threshold**2
 
 def is_two_finger_release(landmarks):
-    # Thumb + index spread open (not pinching), middle + ring + pinky folded.
     thumb_open = abs(landmarks[4].x - landmarks[2].x) > 0.04 or landmarks[4].y < landmarks[3].y
     index_open = landmarks[8].y < landmarks[6].y
     middle_open = landmarks[12].y < landmarks[10].y
     ring_open = landmarks[16].y < landmarks[14].y
     pinky_open = landmarks[20].y < landmarks[18].y
-    return (thumb_open and index_open
-            and (not middle_open) and (not ring_open) and (not pinky_open)
-            and not is_pinch(landmarks))
+    return (thumb_open and index_open and (not middle_open) and (not ring_open) and (not pinky_open) and not is_pinch(landmarks))
 
 def is_three_finger_release(landmarks):
-    # Thumb + index + middle extended, ring + pinky folded.
     thumb_open = abs(landmarks[4].x - landmarks[2].x) > 0.04 or landmarks[4].y < landmarks[3].y
     index_open = landmarks[8].y < landmarks[6].y
     middle_open = landmarks[12].y < landmarks[10].y
@@ -252,7 +244,7 @@ def is_three_finger_release(landmarks):
 
 def get_hand_status(landmarks):
     count = get_finger_open_count(landmarks)
-    if is_three_finger_pinch(landmarks):   # check before 2-finger pinch — it also satisfies is_pinch
+    if is_three_finger_pinch(landmarks):
         return "PINCH3"
     if is_pinch(landmarks):
         return "PINCH"
@@ -292,27 +284,28 @@ def map_landmarks_from_roi(hand_landmarks, roi, frame_w, frame_h):
         mapped.append(SimpleNamespace(x=fx, y=fy, z=getattr(lm, "z", 0.0)))
     return mapped
 
-# ─── BACKGROUND GAME LOOP THREAD ──────────────────────────────────────────────
+# ─── MULTI-THREADING GLOBALS ──────────────────────────────────────────────────
 latest_frame = None
-frame_lock   = threading.Lock()
+raw_frame_for_ai = None  
+frame_lock = threading.Lock()
+
 gesture_mode_lock = threading.Lock()
 current_grab_mode = DEFAULT_GRAB_MODE
+
 roi_lock = threading.Lock()
 current_roi = DEFAULT_ROI.copy()
 
+shared_landmarks = []
+landmarks_lock = threading.Lock()
+
+# ─── THREAD 1: CAMERA STREAMING LOOP (FAST) ───────────────────────────────────
 def game_loop():
-    global latest_frame
+    global latest_frame, raw_frame_for_ai
     with game_lock:
         game_state["blocks"] = generate_3_options()
 
-    prev_gesture = "NONE"
-    fps_timer    = time.time()
-    fps_count    = 0
-    fps_val      = 0
-    last_cursor_x = SCREEN_W // 2
-    last_cursor_y = SCREEN_H // 2
-    smooth_x = float(last_cursor_x)
-    smooth_y = float(last_cursor_y)
+    fps_timer = time.time()
+    fps_count = 0
 
     while True:
         with cap_lock:
@@ -321,51 +314,23 @@ def game_loop():
             time.sleep(0.01)
             continue
 
-        frame     = cv2.flip(frame, 1)
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frame_h, frame_w = frame.shape[:2]
+        frame = cv2.flip(frame, 1)
+
+        # Bagikan frame mentah ke thread AI
+        with frame_lock:
+            raw_frame_for_ai = frame.copy()
+
         with roi_lock:
-            roi = clamp_roi(current_roi, frame_w, frame_h)
-            current_roi.update(roi)
+            roi = clamp_roi(current_roi, CAM_W, CAM_H)
 
-        # np.ascontiguousarray: slices with x>0 or w<frame_w are non-contiguous,
-        # which silently breaks mp.Image — this makes the copy unconditional.
-        roi_rgb = np.ascontiguousarray(
-            frame_rgb[roi["y"]:roi["y"] + roi["h"], roi["x"]:roi["x"] + roi["w"]]
-        )
-        # MediaPipe detects best on images ≥224px; upscale small ROIs.
-        rh, rw = roi_rgb.shape[:2]
-        if rh < 224 or rw < 224:
-            scale = max(224 / rh, 224 / rw)
-            roi_rgb = cv2.resize(
-                roi_rgb, (int(rw * scale), int(rh * scale)), interpolation=cv2.INTER_LINEAR
-            )
-        mp_image  = mp.Image(image_format=mp.ImageFormat.SRGB, data=roi_rgb)
-        timestamp_ms = int(time.time() * 1000)
-        results   = hand_landmarker.detect_for_video(mp_image, timestamp_ms)
+        # Gambar titik-titik tangan (hasil kalkulasi dari AI thread)
+        with landmarks_lock:
+            lms_to_draw = shared_landmarks.copy()
+        
+        for lm in lms_to_draw:
+            cv2.circle(frame, (int(lm.x * CAM_W), int(lm.y * CAM_H)), 3, (0, 255, 0), -1)
 
-        # Default: cursor stays at last clamped position so the pointer never
-        # disappears and a held block stays visible at the screen edge.
-        cursor_x, cursor_y = last_cursor_x, last_cursor_y
-        current_gesture    = "NONE"
-
-        if results.hand_landmarks:
-            roi_lm = results.hand_landmarks[0]  # ROI-relative (0-1)
-
-            raw_x, raw_y = get_cursor_position(roi_lm)
-            smooth_x = CURSOR_ALPHA * raw_x + (1 - CURSOR_ALPHA) * smooth_x
-            smooth_y = CURSOR_ALPHA * raw_y + (1 - CURSOR_ALPHA) * smooth_y
-            # Clamp to game screen so cursor "sticks" at the edge when hand
-            # reaches the ROI boundary rather than going off-canvas.
-            cursor_x = max(0, min(SCREEN_W, int(smooth_x)))
-            cursor_y = max(0, min(SCREEN_H, int(smooth_y)))
-            last_cursor_x, last_cursor_y = cursor_x, cursor_y
-            current_gesture = get_hand_status(roi_lm)
-
-            for lm in map_landmarks_from_roi(roi_lm, roi, frame_w, frame_h):
-                cv2.circle(frame, (int(lm.x * frame_w), int(lm.y * frame_h)), 3, (0, 255, 0), -1)
-        # No else: smooth stays valid; cursor holds last clamped position.
-
+        # Gambar kotak ROI
         cv2.rectangle(
             frame,
             (roi["x"], roi["y"]),
@@ -374,24 +339,98 @@ def game_loop():
             2,
         )
 
-        # FPS
+        # Hitung FPS
         fps_count += 1
         if time.time() - fps_timer >= 1.0:
-            fps_val = fps_count
-
-            fps_history.append(fps_val)
-
+            with game_lock:
+                game_state["fps"] = fps_count
+            fps_history.append(fps_count)
             fps_count = 0
             fps_timer = time.time()
 
+        # Encode untuk browser
+        _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+        with frame_lock:
+            latest_frame = buf.tobytes()
+
+        time.sleep(1/30) # Lock frame rate webstream di 30 fps
+
+# ─── THREAD 2: AI PROCESSING & GAME LOGIC LOOP (BACKGROUND) ───────────────────
+def ai_loop():
+    global raw_frame_for_ai, shared_landmarks
+    prev_gesture = "NONE"
+    last_cursor_x = SCREEN_W // 2
+    last_cursor_y = SCREEN_H // 2
+    smooth_x = float(last_cursor_x)
+    smooth_y = float(last_cursor_y)
+
+    while True:
+        with frame_lock:
+            if raw_frame_for_ai is None:
+                frame = None
+            else:
+                frame = raw_frame_for_ai.copy()
+
+        if frame is None:
+            time.sleep(0.01)
+            continue
+
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frame_h, frame_w = frame.shape[:2]
+        
+        with roi_lock:
+            roi = clamp_roi(current_roi, frame_w, frame_h)
+
+        roi_rgb = np.ascontiguousarray(
+            frame_rgb[roi["y"]:roi["y"] + roi["h"], roi["x"]:roi["x"] + roi["w"]]
+        )
+        
+        # Upscale gambar jika terlalu kecil untuk MediaPipe
+        rh, rw = roi_rgb.shape[:2]
+        if rh < 224 or rw < 224:
+            if rh > 0 and rw > 0:
+                scale = max(224 / rh, 224 / rw)
+                roi_rgb = cv2.resize(
+                    roi_rgb, (int(rw * scale), int(rh * scale)), interpolation=cv2.INTER_LINEAR
+                )
+
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=roi_rgb)
+        timestamp_ms = int(time.time() * 1000)
+        
+        # PROSES INFERENCE AI (Bagian paling berat)
+        results = hand_landmarker.detect_for_video(mp_image, timestamp_ms)
+
+        cursor_x, cursor_y = last_cursor_x, last_cursor_y
+        current_gesture = "NONE"
+        mapped_landmarks = []
+
+        if results.hand_landmarks:
+            roi_lm = results.hand_landmarks[0]
+            raw_x, raw_y = get_cursor_position(roi_lm)
+            
+            smooth_x = CURSOR_ALPHA * raw_x + (1 - CURSOR_ALPHA) * smooth_x
+            smooth_y = CURSOR_ALPHA * raw_y + (1 - CURSOR_ALPHA) * smooth_y
+            
+            cursor_x = max(0, min(SCREEN_W, int(smooth_x)))
+            cursor_y = max(0, min(SCREEN_H, int(smooth_y)))
+            last_cursor_x, last_cursor_y = cursor_x, cursor_y
+            
+            current_gesture = get_hand_status(roi_lm)
+            mapped_landmarks = map_landmarks_from_roi(roi_lm, roi, frame_w, frame_h)
+
+        # Kirim hasil koordinat ke thread kamera agar bisa digambar
+        with landmarks_lock:
+            shared_landmarks = mapped_landmarks
+
+        # EKSEKUSI LOGIKA GAME
         with game_lock:
             gs = game_state
             with gesture_mode_lock:
                 grab_mode = current_grab_mode
+            
             gs["cursor_x"] = cursor_x
             gs["cursor_y"] = cursor_y
             gs["gesture"]  = current_gesture
-            gs["fps"]      = fps_val
 
             if gs["state"] == "PLAYING":
                 is_grab_now = is_grab_active(current_gesture, grab_mode)
@@ -399,14 +438,10 @@ def game_loop():
 
                 is_release_now = is_release_active(current_gesture, grab_mode)
                 was_release_prev = is_release_active(prev_gesture, grab_mode)
+                
                 # GRAB
-                if (
-                    is_grab_now
-                    and not was_grab_prev
-                    and gs["held_idx"] == -1
-                ):
+                if is_grab_now and not was_grab_prev and gs["held_idx"] == -1:
                     gesture_stats["grab_total"] += 1
-
                     for i, b in enumerate(gs["blocks"]):
                         if b["is_alive"]:
                             if abs(cursor_x - b["base_x"]) < 60 and abs(cursor_y - b["base_y"]) < 60:
@@ -415,13 +450,8 @@ def game_loop():
                                 break
 
                 # DROP
-                elif (
-                    is_release_now
-                    and not was_release_prev
-                    and gs["held_idx"] != -1
-                ):
+                elif is_release_now and not was_release_prev and gs["held_idx"] != -1:
                     gesture_stats["drop_total"] += 1
-
                     bd = gs["blocks"][gs["held_idx"]]
                     matrix = bd["matrix"]
                     off_c  = len(matrix[0]) // 2
@@ -458,19 +488,13 @@ def game_loop():
                         gs["blocks"]   = generate_3_options()
                         gs["held_idx"] = -1
                         gs["state"]    = "PLAYING"
-                    elif exit_x <= cursor_x <= (exit_x + 100) and exit_y <= cursor_y <= (exit_y + 42):
-                        pass  # Could signal shutdown; ignored in web mode
 
         prev_gesture = current_gesture
+        time.sleep(1/60) # Beri jeda prosesor
 
-        # Encode frame for MJPEG
-        _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
-        with frame_lock:
-            latest_frame = buf.tobytes()
-
-        time.sleep(1/30)
-
+# Mulai kedua Thread secara parallel
 threading.Thread(target=game_loop, daemon=True).start()
+threading.Thread(target=ai_loop, daemon=True).start()
 
 # ─── FLASK ROUTES ─────────────────────────────────────────────────────────────
 @app.route("/")
@@ -620,9 +644,7 @@ def roi_select():
     return jsonify({"ok": True, "current": safe_roi})
 
 def save_experiment_results():
-
     avg_fps = 0
-
     if len(fps_history) > 0:
         avg_fps = sum(fps_history) / len(fps_history)
 
@@ -630,68 +652,39 @@ def save_experiment_results():
     drop_accuracy = 0
 
     if gesture_stats["grab_total"] > 0:
-        grab_accuracy = (
-            gesture_stats["grab_success"]
-            / gesture_stats["grab_total"]
-        ) * 100
+        grab_accuracy = (gesture_stats["grab_success"] / gesture_stats["grab_total"]) * 100
 
     overall_success = 0
-
-    total_attempts = (
-        gesture_stats["grab_total"] +
-        gesture_stats["drop_total"]
-    )
-
-    total_success = (
-        gesture_stats["grab_success"] +
-        gesture_stats["drop_success"]
-    )
+    total_attempts = gesture_stats["grab_total"] + gesture_stats["drop_total"]
+    total_success = gesture_stats["grab_success"] + gesture_stats["drop_success"]
 
     if total_attempts > 0:
-        overall_success = (
-            total_success /
-            total_attempts
-        ) * 100
+        overall_success = (total_success / total_attempts) * 100
 
     output_file = os.path.abspath("experiment_results.csv")    
-
     print("Saving to:", output_file)
 
     with open(output_file, "w", newline="") as f:
-
         writer = csv.writer(f)
-
         writer.writerow(["Metric", "Value"])
-
         writer.writerow(["Average FPS", round(avg_fps, 2)])
-
         writer.writerow(["Grab Total", gesture_stats["grab_total"]])
-
         writer.writerow(["Grab Success", gesture_stats["grab_success"]])
-
         writer.writerow(["Grab Accuracy (%)", round(grab_accuracy, 2)])
-
         writer.writerow(["Drop Total", gesture_stats["drop_total"]])
-
         writer.writerow(["Drop Success", gesture_stats["drop_success"]])
-
         writer.writerow(["Drop Accuracy (%)", round(drop_accuracy, 2)])
-
-        writer.writerow([
-    "Overall Success Rate (%)",
-    round(overall_success, 2)
-])
+        writer.writerow(["Overall Success Rate (%)", round(overall_success, 2)])
     print("Experiment results saved.")
 
 @app.route("/save_results")
 def save_results():
-
     save_experiment_results()
-
     return jsonify({
         "status": "success",
         "message": "Experiment results saved."
     })
 atexit.register(save_experiment_results)
+
 if __name__ == "__main__":
     app.run(debug=False, threaded=True, host="0.0.0.0", port=5000)
