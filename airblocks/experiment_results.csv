@@ -1,9 +1,9 @@
 Metric,Value
-Average FPS,14.65
-Grab Total,22
-Grab Success,15
-Grab Accuracy (%),68.18
-Drop Total,15
-Drop Success,13
+Average FPS,14.81
+Grab Total,15
+Grab Success,11
+Grab Accuracy (%),73.33
+Drop Total,11
+Drop Success,6
 Drop Accuracy (%),0
-Overall Success Rate (%),75.68
+Overall Success Rate (%),65.38
