@@ -192,4 +192,4 @@ these results.
 
 ## 📄 License
 
-The Game is published under MIT (see [app/LICENSE](app/LICENSE))
+The Game is published under MIT (see [MIT LICENSE](./LICENSE))
