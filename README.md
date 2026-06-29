@@ -11,12 +11,8 @@ columns to score.
 
 ## 🌐 Live Demo
 
-> **▶️ Play it here:** [click on this link](https://huggingface.co/spaces/britod/airblocks-handgesture-games)
-
-| Deployment | URL |
-|------------|-----|
-| 🟣 Hugging Face Spaces | _add link_ |
-| 🐙 GitHub Pages | _add link_ |
+> **▶️ Try the game here:** [click on this link](https://huggingface.co/spaces/britod/airblocks-handgesture-games)  
+> or watch [this video](https://drive.google.com/file/d/1rzPOcpkYdnbqFuqbE1CfXpa-nOd3SOLO/view) for explanation about how to use the application
 
 ---
 
